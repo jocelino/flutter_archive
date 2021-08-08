@@ -438,5 +438,5 @@ class FlutterArchivePlugin : FlutterPlugin, MethodCallHandler {
 
     // This is needed because ZipFile implements Closeable only starting from API 19 and
     // we support >=16
-    class ZipFileEx(name: String?) : ZipFile(name), Closeable
+    class ZipFileEx(name: String?) : ZipFile(name, Charset.forName("CP866")), Closeable
 }
