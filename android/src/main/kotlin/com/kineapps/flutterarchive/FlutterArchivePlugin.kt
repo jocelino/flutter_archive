@@ -5,7 +5,9 @@
 
 package com.kineapps.flutterarchive
 
+import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
@@ -25,6 +27,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.charset.Charset
 import java.util.zip.ZipEntry
 import java.util.zip.ZipEntry.DEFLATED
 import java.util.zip.ZipFile
@@ -310,57 +313,62 @@ class FlutterArchivePlugin : FlutterPlugin, MethodCallHandler {
         Log.d(LOG_TAG, "destinationDir.canonicalPath: ${destinationDir.canonicalPath}")
         Log.d(LOG_TAG, "destinationDir.absolutePath: ${destinationDir.absolutePath}")
 
-        ZipFileEx(zipFilePath).use { zipFile ->
-            val entriesCount = zipFile.size().toDouble()
-            var currentEntryIndex = 0.0
-            for (ze in zipFile.entries()) {
-                val filename = ze.name
-                Log.d(LOG_TAG, "zipEntry fileName=$filename, compressedSize=${ze.compressedSize}, size=${ze.size}, crc=${ze.crc}")
+        val zipFile : ZipFile;
 
-                val outputFile = File(destinationDirPath, filename)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            zipFile = ZipFile(zipFilePath, Charset.forName("CP866"))
+        }else{
+            zipFile = ZipFile(zipFilePath);
+        }
 
-                // prevent Zip Path Traversal attack
-                // https://support.google.com/faqs/answer/9294009
-                val outputFileCanonicalPath = outputFile.canonicalPath
-                if (!outputFileCanonicalPath.startsWith(destinationDir.canonicalPath)) {
-                    Log.d(LOG_TAG, "outputFile path: ${outputFile.path}")
-                    Log.d(LOG_TAG, "canonicalPath: $outputFileCanonicalPath")
-                    throw SecurityException("Invalid zip file")
+        val entriesCount = zipFile.size().toDouble()
+        var currentEntryIndex = 0.0
+        for (ze in zipFile.entries()) {
+            val filename = ze.name
+            Log.d(LOG_TAG, "zipEntry fileName=$filename, compressedSize=${ze.compressedSize}, size=${ze.size}, crc=${ze.crc}")
+
+            val outputFile = File(destinationDirPath, filename)
+            
+            val outputFileCanonicalPath = outputFile.canonicalPath
+            if (!outputFileCanonicalPath.startsWith(destinationDir.canonicalPath)) {
+                Log.d(LOG_TAG, "outputFile path: ${outputFile.path}")
+                Log.d(LOG_TAG, "canonicalPath: $outputFileCanonicalPath")
+                throw SecurityException("Invalid zip file")
+            }
+
+            if (reportProgress) {
+                // report progress
+                val progress: Double = currentEntryIndex++ / (entriesCount - 1) * 100
+
+                Log.e(LOG_TAG, "Waiting reportProgress...")
+                val zipFileOperation = reportProgress(jobId, ze, progress)
+                Log.e(LOG_TAG, "...reportProgress: $zipFileOperation")
+
+                if (zipFileOperation == ZipFileOperation.SKIP_ITEM) {
+                    continue
+                } else if (zipFileOperation == ZipFileOperation.CANCEL) {
+                    break
+                }
+            }
+
+            // need to create any missing directories
+            if (ze.isDirectory) {
+                Log.d(LOG_TAG, "Creating directory: " + outputFile.path)
+                outputFile.mkdirs()
+            } else {
+                val parentDir = outputFile.parentFile
+                if (parentDir != null && !parentDir.exists()) {
+                    Log.d(LOG_TAG, "Creating directory: " + parentDir.path)
+                    parentDir.mkdirs()
                 }
 
-                if (reportProgress) {
-                    // report progress
-                    val progress: Double = currentEntryIndex++ / (entriesCount - 1) * 100
-
-                    Log.e(LOG_TAG, "Waiting reportProgress...")
-                    val zipFileOperation = reportProgress(jobId, ze, progress)
-                    Log.e(LOG_TAG, "...reportProgress: $zipFileOperation")
-
-                    if (zipFileOperation == ZipFileOperation.SKIP_ITEM) {
-                        continue
-                    } else if (zipFileOperation == ZipFileOperation.CANCEL) {
-                        break
-                    }
-                }
-
-                // need to create any missing directories
-                if (ze.isDirectory) {
-                    Log.d(LOG_TAG, "Creating directory: " + outputFile.path)
-                    outputFile.mkdirs()
-                } else {
-                    val parentDir = outputFile.parentFile
-                    if (parentDir != null && !parentDir.exists()) {
-                        Log.d(LOG_TAG, "Creating directory: " + parentDir.path)
-                        parentDir.mkdirs()
-                    }
-
-                    Log.d(LOG_TAG, "Writing entry to file: " + outputFile.path)
-                    zipFile.getInputStream(ze).use { zis ->
-                        outputFile.outputStream().use { outputStream -> zis.copyTo(outputStream) }
-                    }
+                Log.d(LOG_TAG, "Writing entry to file: " + outputFile.path)
+                zipFile.getInputStream(ze).use { zis ->
+                    outputFile.outputStream().use { outputStream -> zis.copyTo(outputStream) }
                 }
             }
         }
+
     }
 
     private suspend fun reportProgress(jobId: Int, zipEntry: ZipEntry, progress: Double): ZipFileOperation {
@@ -438,5 +446,6 @@ class FlutterArchivePlugin : FlutterPlugin, MethodCallHandler {
 
     // This is needed because ZipFile implements Closeable only starting from API 19 and
     // we support >=16
+    @RequiresApi(Build.VERSION_CODES.N)
     class ZipFileEx(name: String?) : ZipFile(name, Charset.forName("CP866")), Closeable
 }
